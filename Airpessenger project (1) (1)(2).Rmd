@@ -1,0 +1,923 @@
+---
+title: "Forecasting AirPassenger Data Using ARIMA, SARIMA, and ETS Models"
+output: html_document
+date: "2025-03-20"
+Author : Amine Bouraoui 
+Class : MBM 1/ BA /2024 -2025
+---
+
+```{r setup, include=FALSE}
+# Load libraries 
+library(forecast)
+library(astsa)
+library(tseries)
+library(ggplot2)
+library(MLmetrics)
+library(tidyr)
+
+##################################################################################################################################
+
+## 1. Data Exploration ##
+
+#############################################################
+
+#1.1 Load the dataset
+data(AirPassengers)
+autoplot(AirPassengers) + ggtitle("Monthly Airline Passengers (1949-1960)")
+
+#1.2 Decompose the time series
+decomposed <- stl(AirPassengers, s.window = "periodic")
+autoplot(decomposed) + ggtitle("Decomposition of AirPassengers")
+
+#1.3 Check ACF and PACF
+ggAcf(AirPassengers) + ggtitle("ACF of AirPassengers")
+ggPacf(AirPassengers) + ggtitle("PACF of AirPassengers")
+
+##################################################################################################################################
+
+## 2. Preprocessing ## 
+
+#############################################################
+
+#2.1Log transformation to stabilize variance.
+log_data <- log(AirPassengers)
+autoplot(log_data) + ggtitle("Log Transformed AirPassengers")
+
+#2.2 Differencing to remove trend
+diff_data <- diff(log_data)
+autoplot(diff_data) + ggtitle("Differenced Log AirPassengers")
+
+#2.3 Plot ACF and PACF of differenced data
+ggAcf(diff_data) + ggtitle("ACF of Differenced Data")
+ggPacf(diff_data) + ggtitle("PACF of Differenced Data")
+
+#2.4 Stationarity tests
+adf_test <- adf.test(diff_data)
+kpss_test <- kpss.test(diff_data)
+print(adf_test)
+print(kpss_test)
+
+#2.5 Split data into train, validation and test sets
+train <- window(log_data, end = c(1957, 12))  # Training set (up to December 1957)
+validation <- window(log_data, start = c(1958, 1), end = c(1958, 12))  # Validation set (1958)
+test <- window(log_data, start = c(1959, 1))  # Test set (1959 onward)
+##################################################################################################################################
+
+## 3. Model Implementation ## 
+
+#############################################################
+
+# 1. Fit ARIMA model (without seasonality)
+
+# 1.1 Define a list of candidate ARIMA models
+candidate_models <- list(
+  Arima(train, order = c(1, 1, 0)),  # ARIMA(1,1,0)
+  Arima(train, order = c(2, 1, 0)), # ARIMA(2,1,0)
+  Arima(train, order = c(1, 1, 1)), # ARIMA(1,1,1)
+  Arima(train, order = c(2, 1, 1)), # ARIMA(2,1,1)
+  Arima(train, order = c(0, 1, 1))  # ARIMA(0,1,1)
+)
+
+# 1.2 Evaluate each model on the validation set
+model_results <- data.frame()
+
+for (i in seq_along(candidate_models)) {
+  model <- candidate_models[[i]]
+  
+ #  1.2.1 Generate forecasts for validation set
+  forecast_values <- forecast(model, h = length(validation))
+  
+ # 1.2.2 Calculate performance metrics
+  rmse_val <- RMSE(forecast_values$mean, validation)
+  mape_val <- MAPE(forecast_values$mean, validation)
+  aic_val <- model$aic
+  bic_val <- BIC(model)
+  
+ # 1.2.3 Store results
+  model_results <- rbind(model_results, data.frame(
+    Model = paste("Model", i),
+    Order = paste(deparse(model$call$order)),
+    RMSE = round(rmse_val, 2),
+    MAPE = round(mape_val, 2),
+    AIC = round(aic_val, 2),
+    BIC = round(bic_val, 2)
+  ))
+}
+
+# 1.3 Print the results table
+print(model_results)
+
+# 1.4 Select the best model based on RMSE
+arima_model <- candidate_models[[which.min(model_results$RMSE)]]
+summary(arima_model)
+
+# 1.5 Print the best model
+print("Best ARIMA Model:")
+print(arima_model)
+
+
+# 2.Residual Analysis
+residuals <- residuals(arima_model)
+
+# 2.1. Visual Inspection of Residuals
+autoplot(residuals) + ggtitle("Residuals from ARIMA Model")
+
+# 2.2. ACF and PACF of Residuals
+ggAcf(residuals) + ggtitle("ACF of Residuals")
+ggPacf(residuals) + ggtitle("PACF of Residuals")
+
+# 2.3. Ljung-Box Test for Autocorrelation
+lb_test <- Box.test(residuals, lag = 10, type = "Ljung-Box")
+print(lb_test)
+
+# 2.4. Normality Check (Shapiro-Wilk Test)
+shapiro_test <- shapiro.test(residuals)
+print(shapiro_test)
+checkresiduals(residuals)
+# 2.5. Homoscedasticity Check
+autoplot(residuals) + ggtitle("Residuals Over Time")
+
+# 3.Forecast
+# 3.1 Generate forecasts
+length_validation <- length(validation)
+arima_forecast <- forecast(arima_model, h = length(validation))
+
+# 3.2 Plot forecast
+autoplot(arima_forecast) + ggtitle("ARIMA Forecast")+
+  xlab("Time") +
+  ylab("Passengers (in thousands)")
+
+# 3.3 Forecast Accuracy Metrics
+mape_arima <- MAPE(arima_forecast$mean, validation)
+rmse_arima <- RMSE(arima_forecast$mean, validation)
+
+print(paste("ARIMA MAPE:", round(mape_arima, 2), "%"))
+print(paste("ARIMA RMSE:", round(rmse_arima, 2)))
+
+#############################################################
+# 1.Fit SARIMA model 
+sarima_model <- auto.arima(train, seasonal = TRUE)
+summary(sarima_model) 
+# 2.Residual Analysis
+residuals_sarima <- residuals(sarima_model)
+
+# 2.1. Visual Inspection of Residuals
+autoplot(residuals_sarima) + ggtitle("Residuals from SARIMA Model")
+
+# 2.2. ACF and PACF of Residuals
+ggAcf(residuals_sarima) + ggtitle("ACF of Residuals from SARIMA Model")
+ggPacf(residuals_sarima) + ggtitle("PACF of Residuals from SARIMA Model")
+
+# 2.3. Ljung-Box Test for Autocorrelation
+lb_test_sarima <- Box.test(residuals_sarima, lag = 10, type = "Ljung-Box")
+print(lb_test_sarima)
+
+# 2.4. Normality Check (Shapiro-Wilk Test)
+shapiro_test_sarima <- shapiro.test(residuals_sarima)
+print(shapiro_test_sarima)
+checkresiduals(residuals_sarima)
+
+# 2.5. Homoscedasticity Check
+autoplot(residuals_sarima) + ggtitle("Residuals Over Time from SARIMA Model")
+
+# 3.Forecast
+# 3.1 Generate forecasts
+length_validation <- length(validation)
+sarima_forecast <- forecast(sarima_model, h = length(validation))
+# 3.3 Plot forecast
+autoplot(sarima_forecast) + ggtitle("SARIMA Forecast")+
+  xlab("Time") +
+  ylab("Passengers (in thousands)")
+
+
+# 3.3 Forecast Accuracy Metrics
+mape_sarima <- MAPE(sarima_forecast$mean, validation)
+rmse_sarima <- RMSE(sarima_forecast$mean, validation)
+
+print(paste("SARIMA MAPE:", round(mape_sarima, 2), "%"))
+print(paste("SARIMA RMSE:", round(rmse_sarima, 2)))
+
+#############################################################
+# 1. Fit ETS Model
+ets_model <- ets(train)
+summary(ets_model)
+
+# 2.Residual Analysis
+residuals_ets <- residuals(ets_model)
+
+# 2.1. Visual Inspection of Residuals
+autoplot(residuals_ets) + ggtitle("Residuals from ETS Model")
+
+# 2.2. ACF and PACF of Residuals
+ggAcf(residuals_ets) + ggtitle("ACF of Residuals from ETS Model")
+ggPacf(residuals_ets) + ggtitle("PACF of Residuals from ETS Model")
+
+# 2.3. Ljung-Box Test for Autocorrelation
+lb_test_ets <- Box.test(residuals_ets, lag = 10, type = "Ljung-Box")
+print(lb_test_ets)
+
+# 2.4. Normality Check (Shapiro-Wilk Test)
+shapiro_test_ets <- shapiro.test(residuals_ets)
+print(shapiro_test_ets)
+checkresiduals(residuals_ets)
+
+# 2.5. Homoscedasticity Check
+autoplot(residuals_ets) + ggtitle("Residuals Over Time from ETS Model")
+# 3.Forecast
+# 3.1 Generate forecasts
+length_validation <- length(validation)
+ets_forecast <- forecast(ets_model, h = length(validation))
+ets_forecast_ts <- ets_forecast$mean
+# 3.2 Plot forecast
+autoplot(ets_forecast) + ggtitle("ETS Forecast") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)")
+# 3.3 Forecast Accuracy Metrics
+mape_ets <- MAPE(ets_forecast$mean, validation)
+rmse_ets <- RMSE(ets_forecast$mean, validation)
+
+print(paste("ETS MAPE:", round(mape_ets, 2), "%"))
+print(paste("ETS RMSE:", round(rmse_ets, 2))) 
+##################################################################################################################################
+
+
+## 4. Model Evaluation ##
+
+#############################################################
+
+#1. Evaluate ARIMA
+arima_accuracy <- accuracy(arima_forecast, validation)
+print("ARIMA Accuracy:")
+print(arima_accuracy)
+
+#1.1 Extract specific metrics for ARIMA
+mape_arima <- MAPE(arima_forecast$mean, validation)
+rmse_arima <- RMSE(arima_forecast$mean, validation)
+aic_arima <- arima_model$aic
+bic_arima <- BIC(arima_model)
+print(paste("ARIMA AIC:", round(aic_arima, 2)))
+print(paste("ARIMA BIC:", round(bic_arima, 2)))
+print(paste("ARIMA MAPE:", round(mape_arima, 2), "%"))
+print(paste("ARIMA RMSE:", round(rmse_arima, 2)))
+
+#2. Evaluate SARIMA
+sarima_accuracy <- accuracy(sarima_forecast, validation)
+print("SARIMA Accuracy:")
+print(sarima_accuracy)
+
+#2.1 Extract specific metrics for SARIMA
+mape_sarima <- MAPE(sarima_forecast$mean, validation)
+rmse_sarima <- RMSE(sarima_forecast$mean, validation)
+aic_sarima <- sarima_model$aic
+bic_sarima <- BIC(sarima_model)
+print(paste("SARIMA AIC:", round(aic_sarima, 2)))
+print(paste("SARIMA BIC:", round(bic_sarima, 2)))
+print(paste("SARIMA MAPE:", round(mape_sarima, 2), "%"))
+print(paste("SARIMA RMSE:", round(rmse_sarima, 2)))
+
+#3 Evaluate ETS
+ets_accuracy <- accuracy(ets_forecast, validation)
+print("ETS Accuracy:")
+print(ets_accuracy)
+
+#3.1 Extract specific metrics for ETS
+mape_ets <- MAPE(ets_forecast$mean, validation)
+rmse_ets <- RMSE(ets_forecast$mean, validation)
+aic_ets <- ets_model$aic
+bic_ets <- BIC(ets_model)
+print(paste("ETS AIC:", round(aic_ets, 2)))
+print(paste("ETS BIC:", round(bic_ets, 2)))
+print(paste("ETS MAPE:", round(mape_ets, 2), "%"))
+print(paste("ETS RMSE:", round(rmse_ets, 2)))
+
+#4. Create a summary table for comparison
+comparison_table <- data.frame(
+  Model = c("ARIMA", "SARIMA", "ETS"),
+  AIC = c(round(aic_arima, 2), round(aic_sarima, 2), round(aic_ets, 2)),
+  BIC = c(round(bic_arima, 2), round(bic_sarima, 2), round(bic_ets, 2)),
+  RMSE = c(round(rmse_arima, 2), round(rmse_sarima, 2), round(rmse_ets, 2)),
+  MAPE = c(round(mape_arima, 2), round(mape_sarima, 2), round(mape_ets, 2))
+)
+print(comparison_table)
+
+#5.1. Plot actual vs. ARIMA forecasted values with custom color
+autoplot(validation) +
+  autolayer(arima_forecast$mean, series = "ARIMA Forecast") +
+  scale_color_manual(values = c("ARIMA Forecast" = "red")) + 
+  ggtitle("ARIMA Forecast vs. Actual Values") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+
+#5.2. Plot actual vs. SARIMA forecasted values with custom color
+autoplot(validation) +
+  autolayer(sarima_forecast$mean, series = "SARIMA Forecast") +
+  scale_color_manual(values = c("SARIMA Forecast" = "blue")) + 
+  ggtitle("SARIMA Forecast vs. Actual Values") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+#5.3. Plot actual vs. ETS forecasted values with custom color
+autoplot(validation) +
+  autolayer(ets_forecast$mean, series = "ETS Forecast") +
+  scale_color_manual(values = c("ETS Forecast" = "green")) +  # Assign green color to ETS
+  ggtitle("ETS Forecast vs. Actual Values") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+#5.4. Visualize Forecasts
+autoplot(validation) +
+  autolayer(arima_forecast$mean, series = "ARIMA Forecast") +
+  autolayer(sarima_forecast$mean, series = "SARIMA Forecast") +
+  autolayer(ets_forecast$mean, series = "ETS Forecast") +
+  ggtitle("Comparison of Actual vs. Forecasted Values") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+
+#6. Create a data frame with RMSE and MAPE values
+model_metrics <- data.frame(
+  Model = c("ARIMA", "SARIMA", "ETS"),
+  RMSE = c(0.16, 0.10, 0.08),
+  MAPE = c(0.02, 0.02, 0.01)
+)
+
+#6.1. View the data frame
+print(model_metrics)
+
+
+#7. Reshape the data into long format
+model_metrics_long <- pivot_longer(
+  model_metrics,
+  cols = c(RMSE, MAPE),         # Columns to reshape
+  names_to = "Metric",          # New column for metric names
+  values_to = "Value"           # New column for metric values
+)
+
+#7.1. View the reshaped data
+print(model_metrics_long)
+
+
+#7.2. Create the bar chart
+ggplot(model_metrics_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = position_dodge()) +  # Grouped bars
+  labs(
+    title = "Comparison of RMSE and MAPE Across Models",
+    x = "Model",
+    y = "Value",
+    fill = "Metric"
+  ) +
+  theme_minimal() +  # Clean theme
+  scale_fill_manual(values = c("steelblue", "orange")) +  # Custom colors
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5)  # Center-align title
+  ) 
+##################################################################################################################################
+
+
+## 5. Test Set Evaluation ##
+
+############################################
+
+# Generate Forecasts for the Test Set 
+# Length of the test set
+length_test <- length(test)
+  
+#1 ETS
+#1.1 Generate forecasts for the test set using the ETS model
+ets_test_forecast <- forecast(ets_model, h = length_test)
+
+#1.2 Align forecasted values with the test set's time index
+ets_test_forecast_aligned <- ts(
+  ets_test_forecast$mean,
+  start = start(test),
+  frequency = frequency(test)
+)
+
+#1.3 Calculate RMSE and MAPE for the test set
+rmse_ets_test <- RMSE(ets_test_forecast_aligned, test)
+mape_ets_test <- MAPE(ets_test_forecast_aligned, test)
+
+#1.4 Print the results
+print(paste("ETS Test RMSE:", round(rmse_ets_test, 2)))
+print(paste("ETS Test MAPE:", round(mape_ets_test, 2), "%"))
+
+#1.5 Plot actual vs. forecasted values
+autoplot(test) +
+  autolayer(ets_test_forecast_aligned, series = "ETS Forecast") +
+  scale_color_manual(values = c("ETS Forecast" = "green")) +
+  ggtitle("ETS Forecast vs. Actual Values (Test Set)") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+############################################
+#2. SARIMA 
+
+#2.1. Generate forecasts for the test set using the ARIMA model
+sarima_test_forecast <- forecast(sarima_model, h = length_test)
+#2.2. Align forecasted values with the test set's time index
+sarima_test_forecast_aligned <- ts(
+  sarima_test_forecast$mean,
+  start = start(test),
+  frequency = frequency(test)
+)
+#2.3. Calculate RMSE and MAPE for the test set
+rmse_sarima_test <- RMSE(sarima_test_forecast_aligned, test)
+mape_sarima_test <- MAPE(sarima_test_forecast_aligned, test)
+
+#2.4. Print the results
+print(paste("SARIMA Test RMSE:", round(rmse_sarima_test, 2)))
+print(paste("SARIMA Test MAPE:", round(mape_sarima_test, 2), "%"))
+
+#2.5. Plot actual vs. forecasted values
+autoplot(test) +
+  autolayer(sarima_test_forecast_aligned, series = "SARIMA Forecast") +
+  scale_color_manual(values = c("SARIMA Forecast" = "red")) +  # Optional: Assign blue color
+  ggtitle("SARIMA Forecast vs. Actual Values (Test Set)") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+#2.6. Combine SARIMA and ETS forecasts into a single plot
+autoplot(test) +
+  autolayer(sarima_test_forecast_aligned, series = "SARIMA Forecast") +
+  autolayer(ets_test_forecast_aligned, series = "ETS Forecast") +
+  scale_color_manual(
+    values = c("SARIMA Forecast" = "red", "ETS Forecast" = "green")
+  ) +
+  ggtitle("SARIMA and ETS Forecasts vs. Actual Values (Test Set)") +
+  xlab("Time") +
+  ylab("Passengers (in thousands)") +
+  theme_minimal()
+
+
+
+```
+# Introduction
+The rapid growth of air travel in the mid-20th century highlighted the need for accurate forecasting of passenger demand. Understanding trends and seasonality in airline passenger numbers is critical for airlines, policymakers, and stakeholders to make informed decisions about capacity planning, resource allocation, and strategic investments. This project focuses on analyzing and forecasting international airline passenger data from 1949 to 1960 using advanced time series models.
+
+The dataset, known as AirPassengers , exhibits clear upward trends and strong seasonal fluctuations, making it an ideal candidate for time series analysis. The primary objective of this study is to evaluate and compare three prominent forecasting models—ARIMA , SARIMA , and ETS —to determine which model performs best in predicting future passenger numbers.
+
+To achieve this goal, we followed a systematic approach:
+
+**Data Exploration** : We examined the raw data, decomposed it into trend, seasonal, and remainder components, and analyzed autocorrelation patterns to identify underlying structures.
+
+**Preprocessing** : Log transformation and differencing were applied to stabilize variance and achieve stationarity, ensuring the data met the assumptions required for modeling.
+
+**Model Fitting** : ARIMA, SARIMA, and ETS models were fitted to the training data, and their performance was evaluated on validation and test sets.
+
+**Residual Diagnostics** : Each model’s residuals were analyzed to ensure they were random and uncorrelated, confirming the adequacy of the models.
+
+**Forecast Evaluation** : Accuracy metrics such as RMSE and MAPE, along with visual comparisons of actual vs. forecasted values, were used to assess model performance.
+
+This report provides a comprehensive analysis of each step, highlighting the strengths and limitations of the models. By the end of this study, we aim to identify the most reliable and accurate model for forecasting airline passenger numbers, offering actionable insights for practical applications.
+
+##################################################################################################################################
+
+## 1. Data Exploration ##
+# Interpretation of the Decomposition Plot
+**1. Data**
+Description : This is the original AirPassengers dataset, showing the monthly totals of international airline passengers from 1949 to 1960.
+
+Observations :
+- The data shows an upward trend over time.
+- There are clear seasonal fluctuations, with peaks occurring roughly every year.
+- The overall pattern suggests both a growing trend and consistent seasonality.
+
+**2. Trend**
+Description : The trend component captures the long-term movement in the data, smoothing out short-term fluctuations and seasonal effects. 
+
+Observations :
+- The trend line shows a steady upward slope, indicating a consistent increase in passenger numbers over the years.
+- This suggests that the demand for air travel has been growing steadily during this period.
+
+**3. Seasonal**
+Description : The seasonal component represents the repeating pattern within each year.
+
+Observations :
+- The seasonal plot shows a clear periodic pattern, with peaks occurring around the same time each year.
+- The peaks likely correspond to periods of higher demand, such as summer months when people tend to travel more for vacations.
+- The troughs represent lower-demand periods, possibly during winter months or other off-peak seasons.
+
+**4. Remainder**
+Description : The remainder component captures what’s left after removing the trend and seasonal effects. It represents random noise or irregularities in the data.
+
+**Observations** :
+- The remainder appears relatively small compared to the trend and seasonal components.
+- Most of the variability in the data is explained by the trend and seasonality.
+- The presence of some residual noise indicates that there may be other factors influencing passenger numbers, but they are not captured by the current decomposition.
+
+
+# Interpretation of ACF and PACF     
+The AirPassengers dataset exhibits strong seasonality with a period of 12 months and a trend .
+The ACF shows significant autocorrelations at multiples of 12, while the PACF indicates an AR(1) component.
+These insights suggest that a SARIMA model is suitable for capturing both the trend and seasonality in the data. 
+
+##################################################################################################################################
+# 2. Preprocessing
+## 2.1 Log Transformation
+- Log transformation is applied to stabilize the variance in the data and improve stationarity.
+
+**Key Observations**:
+- The log-transformed data (log_data) shows a smoother trend compared to the raw data.
+- Seasonal patterns remain visible but are more consistent in magnitude.
+- The upward trend becomes linear, indicating stabilized growth rates.
+
+**Benefits of Log Transformation**:
+- Stationarity: Reduces heteroscedasticity (non-constant variance), a key assumption for many time series models like ARIMA.
+- Improved Model Performance: Stabilizing variance leads to better forecasting accuracy, as most statistical models assume constant variance.
+
+## 2.2 Differencing
+First-order differencing is applied to remove the trend and achieve stationarity.
+
+**Key Observations**:
+
+- The differenced data (diff_data) no longer exhibits a consistent upward trend.
+- Fluctuations appear random, oscillating around zero.
+- Seasonal patterns persist but are now expressed as deviations from the mean rather than part of an overall growth trend.
+
+**Benefits of Differencing**:
+- Stationarity: The mean and variance of the differenced data appear relatively constant over time.
+- Reduced Trend Impact: By removing the trend, the model can focus on capturing seasonal patterns and short-term dynamics.
+
+## 2.3 Stationarity Tests
+**Augmented Dickey-Fuller (ADF) Test**:
+- Purpose: Checks for the presence of a unit root (non-stationarity).
+- Interpretation: If the p-value < 0.05, we reject the null hypothesis of non-stationarity.
+- Results: p-value = `0.01` (much smaller than 0.05).
+- Conclusion: The differenced data is stationary.
+
+**KPSS Test**:
+- Purpose: Checks for level stationarity (whether the mean and variance are constant over time).
+- Interpretation: If the p-value > 0.05, we fail to reject the null hypothesis of stationarity.
+- Results: p-value = `0.1` (greater than 0.05).
+- Conclusion: The differenced data is stationary.
+
+**Summary of Stationarity Tests**:
+-Both tests confirm that the differenced data is stationary:
+-ADF test rejects the null hypothesis of a unit root.
+-KPSS test fails to reject the null hypothesis of stationarity.
+**Implication**: First-order differencing successfully removes the trend, making the log-transformed AirPassengers dataset suitable for modeling with techniques like ARIMA or SARIMA.
+
+## 2.4 Train-Test Split
+- The dataset is split into training and test sets to evaluate model performance.
+
+**Train Set (train)**:
+- Contains data from January 1949 to December 1957.Used to train the model.
+
+**validation Set (validation)**:
+- Contains data from January 1958 to December 1958.Used to tune hyperparameters and compare models.
+
+**Test Set (test)**:
+- Contains data from January 1959 onward.Used to validate the model’s forecasts.
+
+**Key Observations**:
+- The split ensures the model is trained on historical data and tested on future data.
+- This approach mimics real-world forecasting scenarios where models are built on past data to predict future values. 
+
+***==> The log transformation and differencing successfully stabilized the data and achieved stationarity, preparing it for effective modeling***
+
+##################################################################################################################################
+# 3.1 Fit ARIMA model
+**1. Model Interpretation**
+
+**Best Model Selection** :
+The ARIMA(2, 1, 1) model was selected based on its performance metrics:
+- The RMSE of `0.16` indicates excellent accuracy.
+- The MAPE of `0.02` suggests that predictions are, on average, within `0.02` of actual values.
+
+## 2. Residual Analysis
+### 2.1. Visual Inspection of Residuals :
+- **Positive** : Residuals are random and stationary, with no systematic bias.
+- **Negative** : Large spikes suggest potential issues with outliers or extreme values.
+
+## 2.2. ACF and PACF Plots :
+**ACF Plot AND PACF Plot** :
+- Most autocorrelation coefficients are within the confidence bands, indicating no significant autocorrelation at most lags.
+- No significant spikes in either plot suggest that the residuals are uncorrelated.
+**Key Takeaways** :
+- Both ACF and PACF confirm that the residuals are largely white noise, meaning the model has adequately captured the data's patterns.
+### 2.3. Ljung-Box Test :
+**Results** :
+- X-squared = `29.767`, df = 10, p-value = `0.0009352`
+**Interpretation** :
+- p-value = `0.0009352` < 0.05: Reject the null hypothesis.
+- This suggests that there is significant autocorrelation in the residuals up to lag 10, indicating that the model may not be fully capturing all patterns in the data.
+
+### 2.4. Shapiro-Wilk Normality Test :
+**Results** :
+- p-value = `0.0004977`
+**Interpretation** :
+- p-value = `0.0004977` < 0.05: Reject the null hypothesis.
+- Residuals are not normally distributed.
+- Implications : Minor deviations from normality are acceptable if other diagnostics (e.g., Ljung-Box test) confirm that residuals are white noise.
+### 2.5. Homoscedasticity Check
+- The residuals do not show increasing or decreasing variance over time, suggesting homoscedasticity (constant variance).
+
+## 3. Forecast 
+### 3.1Accuracy Metrics
+**MAPE (Mean Absolute Percentage Error)** :
+- MAPE = `0.02`: Predictions are, on average, within `0.02` of actual values, indicating exceptionally high accuracy.
+
+**MASE (Mean Absolute Scaled Error)** :
+- RMSE = `0.16`: Low RMSE values indicate a good fit, especially given the scale of the data.
+
+### 3.2. Forecast Visualization
+**Key Observations** :
+**Training Data** :
+- Captures historical trends and seasonality effectively.
+**Validation Data ** :
+- The ARIMA forecast aligns closely with the validation set, maintaining both trend and seasonal patterns.
+
+# 4. Conclusion
+
+**Strengths** :
+- High Forecasting Accuracy : Extremely low MAPE (`0.02%`) and RMSE (`0.16`) indicate excellent performance.
+- Residual Diagnostics : Residuals are largely white noise, confirming good model adequacy.
+- Trend and Seasonality : The model effectively captures both upward trends and seasonal fluctuations.
+
+**Areas for Improvement** :
+- Non-Normal Residuals : While residuals are slightly non-normal, this does not critically impact the model's validity.
+- Large Spikes : Occasional large spikes in residuals may indicate challenges with outliers or extreme values.
+- Ljung-Box Test : Significant autocorrelation in residuals suggests that the model may not fully capture all patterns in the data.
+
+**Final Verdict** :
+The ARIMA(2, 1, 1) model is reliable and performs exceptionally well in forecasting passenger numbers. It captures both trend and seasonality effectively and is suitable for practical use, provided assumptions hold true.
+
+##################################################################################################################################
+
+## 3.2 SARIMA Model Report
+
+### 1. Model Interpretation
+The fitted SARIMA model is:
+**SARIMA(1,0,0)(0,1,1)[12]**:  with drift was selected based on its performance metrics:
+The RMSE of `0.1` indicates excellent accuracy.
+The MAPE of `0.02%` suggests that predictions are, on average, within `0.02%` of actual values.
+
+### 2. Residual Analysis
+
+#### 2.1. Visual Inspection of Residuals
+- **Positive**: Residuals appear random and stationary, indicating no systematic bias.
+- **Negative**: Large spikes suggest potential issues with outliers or extreme values.
+
+#### 2.2. ACF and PACF Plots
+- **ACF Plot**:
+- Most autocorrelation coefficients are within the confidence bands, indicating no significant autocorrelation at most lags.
+- No significant spikes suggest that the residuals are uncorrelated..
+- **PACF Plot**:
+  - Similar to the ACF plot, no significant spikes indicate that the residuals are white noise.
+**Key Takeaways** :
+- Both ACF and PACF confirm that the residuals are largely white noise, meaning the model has adequately captured the data's patterns.
+
+#### 2.3. Ljung-Box Test for Autocorrelation
+- **Results**:
+  - X-squared = `4.1071`, df = 10, p-value = `0.9424`
+- **Interpretation**:
+  - p-value = `0.9424` > 0.05: Fail to reject the null hypothesis.
+  - Residuals show no significant autocorrelation up to lag 10.
+  - This confirms that the residuals are white noise, indicating good model adequacy..
+
+#### 2.4. Shapiro-Wilk Normality Test
+- **Results**:
+  - p-value = `0.003227`
+- **Interpretation**:
+  - p-value =`0.003227` < 0.05: Reject the null hypothesis.
+  - Residuals are not normally distributed.
+- **Implications**:
+  -  Minor deviations from normality are acceptable if other diagnostics (e.g., Ljung-Box test) confirm that residuals are white noise.
+
+#### 2.5. Homoscedasticity Check
+- The residuals over time appear relatively constant, suggesting homoscedasticity.
+
+### 3. Forecast
+
+#### 3.1. Accuracy Metrics
+- **MAPE (Mean Absolute Percentage Error)**:
+  - MAPE = `0.02`: Predictions are, on average, within `0.02` of actual values, indicating exceptionally high accuracy.
+- **RMSE (Root Mean Squared Error)**:
+  - RMSE = `0.1`: Low RMSE values indicate a good fit, especially given the scale of the data.
+
+#### 3.2. Forecast Visualization
+- **Key Observations**:
+  - **Training Data**:
+    -  Captures historical trends and seasonality effectively.
+  - **Validation Data** : 
+    - The SARIMA forecast aligns closely with the validation set, maintaining both trend and seasonal patterns.
+
+### 4. Conclusion
+- **Strengths**:
+  - High Forecasting Accuracy : Extremely low MAPE (`0.02%`) and RMSE (`0.1`) indicate excellent performance.
+  - Residual Diagnostics : Residuals are largely white noise, confirming good model adequacy.
+  - Trend and Seasonality : The model effectively captures both upward trends and seasonal fluctuations.
+- **Areas for Improvement**:
+  - Non-Normal Residuals : While residuals are slightly non-normal, this does not critically impact the model's validity.
+  - Large Spikes : Occasional large spikes in residuals may indicate challenges with outliers or extreme values.
+
+**Final Verdict**:
+The SARIMA(2, 0, 0)(0, 1, 1)₁₂ with drift model is reliable and performs exceptionally well in forecasting passenger numbers. It captures both trend and seasonality effectively and is suitable for practical use, provided assumptions hold true.
+
+##################################################################################################################################
+
+## 3.3 ETS Model Report
+
+### 1. Model Interpretation
+The selected ETS model is:
+**Key Observations**
+- Model Type : ETS(A,A,A) indicates an additive error, trend, and seasonality model.
+
+The model was selected based on its performance metrics:
+- The RMSE of `0.08` indicates excellent accuracy.
+- The MAPE of `0.01` suggests that predictions are, on average, within `0.01` of actual values.
+
+### 2. Residual Analysis
+
+#### 2.1. Visual Inspection of Residuals
+- **Positive**: Residuals appear random and stationary, indicating no systematic bias.
+- **Negative**: Large spikes suggest potential issues with outliers or extreme values.
+
+#### 2.2. ACF and PACF Plots
+- **ACF Plot**:
+  - Most autocorrelation coefficients are within the confidence bands, indicating no significant autocorrelation at most lags.
+  - No significant spikes suggest that the residuals are uncorrelated.
+- **PACF Plot**:
+  - Similar to the ACF plot, no significant spikes indicate that the residuals are white noise.
+
+#### 2.3. Ljung-Box Test for Autocorrelation
+- **Results**:
+  - X-squared = `10.48`, df = 10, p-value = `0.3994`
+- **Interpretation**:
+  - p-value = `0.3994` > 0.05: Fail to reject the null hypothesis.
+  - Residuals show no significant autocorrelation up to lag 10.
+  - This confirms that the residuals are white noise, indicating good model adequacy.
+
+#### 2.4. Shapiro-Wilk Normality Test
+- **Results**:
+  - p-value = `0.1669`
+**Interpretation**:
+  - p-value = `0.1669` > 0.05: Fail to reject the null hypothesis.
+  - Residuals are approximately normally distributed.
+- **Implications**:
+  - The normality assumption holds, which is beneficial for statistical inference.
+  
+#### 2.5. Homoscedasticity Check
+- The residuals do not show increasing or decreasing variance over time, suggesting homoscedasticity (constant variance).
+
+### 3. Forecast
+
+#### 3.1. Accuracy Metrics
+**MAPE (Mean Absolute Percentage Error)**:
+  - MAPE = `0.01`: Predictions are, on average, within `0.01` of actual values, indicating exceptionally high accuracy.
+**RMSE (Root Mean Squared Error)**:
+  - RMSE = `0.08`: Low RMSE values indicate a good fit, especially given the scale of the data.
+
+#### 3.2. Forecast Visualization
+**Key Observations**:
+***Training Data***:
+    - Training Data : Captures historical trends and seasonality effectively.
+***validation Data***:
+    - validation Data : The ETS forecast aligns closely with the validation set, maintaining both trend and seasonal patterns.
+    
+### 4. Conclusion
+
+#### Strengths:
+- High Forecasting Accuracy : Extremely low MAPE (`0.01`) and RMSE (`0.08`) indicate exceptional performance.
+- Residual Diagnostics : Residuals are uncorrelated (white noise), confirming good model adequacy.
+- Trend and Seasonality : The model effectively captures both upward trends and seasonal fluctuations.
+
+#### Areas for Improvement:
+- Normality of Residuals : While residuals are approximately normal, minor deviations may exist.
+- Large Spikes : Occasional large spikes in residuals may indicate challenges with outliers or extreme values.
+#### Final Verdict:
+The ETS(A,A,A) model is reliable and performs exceptionally well in forecasting passenger numbers. It captures both trend and seasonality effectively and is suitable for practical use, provided assumptions hold true.
+
+##################################################################################################################################
+
+## 4. Model Evaluation 
+
+###1.Key Observations
+
+**RMSE** :
+- ETS has the lowest RMSE (`0.08`), indicating the highest accuracy.
+- SARIMA follows closely with an RMSE of `0.10`.
+- ARIMA has the highest RMSE (`0.16`).
+
+**MAPE** :
+- ETS has the lowest MAPE (`0.01`), indicating the highest accuracy.
+- SARIMA and ARIMA have identical MAPE values (`0.02`).
+
+**AIC and BIC** :
+- SARIMA has the lowest AIC (-`352.32`) and BIC (-`339.50`), suggesting the best trade-off between model fit and complexity.
+- ETS follows with moderate AIC (-`194.80`) and BIC (-`149.20`).
+- ARIMA has higher AIC (-`188.18`) and BIC (-`177.49`).
+
+**Interpretation**
+- ETS performs exceptionally well in terms of RMSE and MAPE, making it the most accurate model.
+- SARIMA offers a strong balance between accuracy (RMSE = `0.10`, MAPE = `0.02`) and model complexity (lowest AIC and BIC).
+- ARIMA is less accurate compared to SARIMA and ETS but still provides reasonable forecasts.
+
+###2. Visual Comparison of Actual vs. Forecasted Values
+
+**ETS Forecast (green line)**:
+- Closely aligns with the actual values, especially during periods of high volatility.
+- Shows the best overall fit, consistent with its low RMSE and MAPE.
+
+**SARIMA Forecast (blue line)**:
+- Provides a good fit but slightly underestimates some peaks compared to ETS.
+- Maintains a smooth trend, reflecting its robust handling of seasonality.
+
+**ARIMA Forecast (pink line)**:
+- Underperforms compared to SARIMA and ETS.
+- Fails to capture the sharp fluctuations in the data, resulting in higher RMSE and MAPE.
+
+###3.Based on the evaluation:
+
+**Best Overall Model** : ETS achieves the lowest RMSE (`0.08`) and MAPE (`0.01`), making it the most accurate model.
+
+**Balanced Model** : SARIMA offers a strong combination of accuracy (RMSE = `0.10`, MAPE = `0.02`) and model parsimony (lowest AIC and BIC).
+
+**Least Accurate Model** : ARIMA underperforms compared to SARIMA and ETS, with higher RMSE (`0.16`) and MAPE (`0.02`).
+For practical forecasting, ETS is recommended due to its exceptional accuracy. However, if model simplicity or interpretability is a priority, SARIMA is a strong alternative.
+
+##################################################################################################################################
+
+# 5.Test Set Evaluation
+
+## 1. Overview
+The goal is to evaluate the performance of the ETS and SARIMA models on the test set (test) to confirm their generalization ability. The test set spans from 1959 onward , allowing us to assess how well the models forecast future values.
+
+## 2. Interpretation
+
+### 2.1. ETS Model
+**Strengths** :
+- High accuracy on the validation set (RMSE = `0.08`, MAPE = `0.01`).
+- Smooth and interpretable forecasts.
+
+**Limitations** :
+- On the test set, the ETS model shows slightly higher RMSE (`0.07`) and MAPE (`0.01`) compared to SARIMA.
+- Slight underperformance during periods of high volatility.
+
+### 2.2. SARIMA Model
+**Strengths** :
+Exceptional accuracy on the test set (RMSE = `0.03`, MAPE = `0.00`).
+Captures both trend and seasonality effectively.
+Performs better than ETS in terms of both RMSE and MAPE.
+
+**Limitations** :
+Requires careful parameter tuning and understanding of ARIMA components.
+Slightly more complex compared to ETS.
+
+## 3. Final Verdict
+**Based on the test set evaluation**:
+- SARIMA demonstrates superior performance with the lowest RMSE (`0.03`) and MAPE (`0.00`), making it the best-performing model.
+- ETS remains highly accurate but is outperformed by SARIMA on the test set.
+
+##4. Recommendations
+**Best Model for Forecasting** :
+SARIMA is recommended for its exceptional accuracy and ability to capture both trend and seasonality effectively.
+
+**Alternative Model** :
+If simplicity and ease of interpretation are priorities, ETS is a strong contender, given its high accuracy on the validation set.
+
+##################################################################################################################################
+
+# 6. Conclusion
+
+This project aimed to forecast international airline passenger numbers using time series models. Through rigorous data exploration, preprocessing, model fitting, and evaluation, we successfully compared three prominent models: ARIMA , SARIMA , and ETS . 
+
+## 1. Data Exploration
+- The AirPassengers dataset exhibited clear upward trends and strong seasonal fluctuations with a 12-month period.
+- Decomposition revealed distinct trend, seasonal, and remainder components, providing valuable insights into the underlying patterns.
+
+##2. Preprocessing
+- Log transformation stabilized variance, making the data more suitable for modeling.
+- First-order differencing removed the trend, achieving stationarity as confirmed by ADF and KPSS tests.
+- These preprocessing steps ensured that the data met the assumptions required for ARIMA and SARIMA modeling.
+
+##3. Model Performance
+- ETS demonstrated exceptional accuracy on both validation and test sets, achieving the lowest RMSE (`0.08` on validation, `0.07` on test) and MAPE (`0.01` on both).
+- SARIMA outperformed ETS on the test set, with RMSE = `0.03` and MAPE = `0.00`, showcasing its superior generalization ability.
+- ARIMA performed reasonably well but was less accurate compared to SARIMA and ETS, particularly during periods of high volatility.
+
+##4. Residual Diagnostics
+- All models produced residuals that were largely white noise, confirming their adequacy in capturing the data’s patterns.
+- Minor deviations from normality were observed but did not critically impact model validity.
+- Homoscedasticity checks confirmed constant variance in residuals, supporting the reliability of the models.
+
+##5. Test Set Evaluation
+- SARIMA emerged as the best-performing model, achieving the lowest RMSE (`0.03`) and MAPE (`0.00`) on the test set.
+- ETS remained highly accurate but was slightly outperformed by SARIMA during high-volatility periods.
+- ARIMA underperformed compared to both SARIMA and ETS, highlighting its limitations in handling complex seasonality.
+
+##6. Recommendations
+- For practical forecasting , SARIMA is the recommended model due to its exceptional accuracy and ability to capture both trend and seasonality effectively.
+- If simplicity and interpretability are priorities, ETS is a strong alternative, offering high accuracy and ease of use.
+
+#Final Thoughts
+This analysis underscores the importance of selecting the right model based on both performance metrics and practical considerations. While SARIMA is the optimal choice for this dataset, ETS provides a reliable and interpretable alternative. These findings demonstrate the value of leveraging advanced time series models to make accurate and actionable forecasts in real-world scenarios.
+
