@@ -104,5 +104,3 @@ better to unseen data.
 
 **Use ETS** when simplicity and interpretability matter — it is easier 
 to explain to non-technical stakeholders and performs nearly as well.
-
----
